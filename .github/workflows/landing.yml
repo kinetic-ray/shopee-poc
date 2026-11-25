@@ -1,0 +1,35 @@
+name: Public landing metadata PoC
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-save cheerio
+      - run: |
+          node --input-type=module <<'JS'
+          import * as cheerio from 'cheerio';
+          for(const url of ['https://s.shopee.co.id/8fUCaHyiVV','https://s.shopee.co.id/4B1ldSUQcr']){
+            try {
+              const r=await fetch(url,{signal:AbortSignal.timeout(15000)});
+              const u=new URL(r.url);
+              if(u.hostname!=='shopee.co.id') throw Error('Unexpected destination');
+              const html=await r.text();
+              const $=cheerio.load(html);
+              const meta={};
+              $('meta').each((_,e)=>{const k=$(e).attr('property')||$(e).attr('name');if(k && /^(og:|twitter:|description$)/.test(k))meta[k]=$(e).attr('content');});
+              const ld=$('script[type="application/ld+json"]').map((_,e)=>$(e).text().slice(0,12000)).get();
+              console.log(JSON.stringify({url,status:r.status,path:u.pathname,bytes:Buffer.byteLength(html),title:$('title').text(),meta,ld,canonical:$('link[rel="canonical"]').attr('href'),scriptIds:$('script[id]').map((_,e)=>$(e).attr('id')).get()}));
+              const img=meta['og:image'];
+              if(img && /^https:\/\/(?:[a-z0-9-]+\.)?(?:shopee\.co\.id|shopee\.com|shopeemobile\.com)\//i.test(img)){
+                const ir=await fetch(img,{redirect:'error',signal:AbortSignal.timeout(10000)});
+                console.log(JSON.stringify({url,img,status:ir.status,type:ir.headers.get('content-type'),bytes:(await ir.arrayBuffer()).byteLength}));
+              }
+            }catch(e){console.log(JSON.stringify({url,error:e.message}));}
+          }
+          JS
