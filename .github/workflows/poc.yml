@@ -1,0 +1,42 @@
+name: Shopee live PoC
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          git clone --depth 1 https://github.com/akherlan/onlineshop.git candidate
+          cd candidate
+          git rev-parse HEAD
+          npm install --ignore-scripts --omit=dev
+          npm audit --omit=dev || true
+      - working-directory: candidate
+        run: |
+          node --input-type=module <<'JS'
+          import {get_shopee_product_detail} from './shopee.js';
+          for(const url of ['https://shopee.co.id/product/77879692/27672934226','https://shopee.co.id/product/5696604/15949131744','https://s.shopee.co.id/8fUCaHyiVV','https://s.shopee.co.id/4B1ldSUQcr']){
+            try {
+              let target=url;
+              if(new URL(url).hostname==='s.shopee.co.id'){
+                const r=await fetch(url,{signal:AbortSignal.timeout(12000)});
+                target=r.url;
+                console.log(JSON.stringify({url,target,status:r.status}));
+                if(new URL(target).hostname!=='shopee.co.id') throw Error('Unsupported host');
+              }
+              const result=await Promise.race([get_shopee_product_detail(target),new Promise((_,reject)=>setTimeout(()=>reject(Error('Timeout')),15000))]);
+              console.log(JSON.stringify({url,target,result}));
+              const img=result?.images?.[0];
+              if(img && new URL(img).hostname==='cf.shopee.co.id'){
+                const r=await fetch(img,{redirect:'error',signal:AbortSignal.timeout(10000)});
+                console.log(JSON.stringify({img,status:r.status,type:r.headers.get('content-type'),bytes:(await r.arrayBuffer()).byteLength}));
+              }
+            }catch(e){console.log(JSON.stringify({url,error:e.message}));}
+          }
+          process.exit(0);
+          JS
