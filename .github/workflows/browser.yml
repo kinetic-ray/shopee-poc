@@ -1,0 +1,49 @@
+name: Public browser rendering PoC
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          npm install --ignore-scripts --no-save playwright
+          npx playwright install --with-deps chromium
+      - run: |
+          mkdir -p evidence
+          node --input-type=module <<'JS'
+          import {chromium} from 'playwright';
+          import fs from 'node:fs';
+          const browser=await chromium.launch();
+          for(const [i,url] of ['https://s.shopee.co.id/8fUCaHyiVV','https://s.shopee.co.id/4B1ldSUQcr'].entries()){
+            const context=await browser.newContext({viewport:{width:390,height:844}});
+            const page=await context.newPage();
+            const network=[];
+            page.on('response',r=>{const u=new URL(r.url());if(/(^|\.)shopee\.co\.id$/.test(u.hostname)&&['xhr','fetch','document'].includes(r.request().resourceType()))network.push({path:u.pathname,status:r.status()});});
+            try{
+              const r=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
+              await page.waitForTimeout(5000);
+              const body=(await page.locator('body').innerText({timeout:5000})).slice(0,4000);
+              const blocked=/captcha|verify you are human|verifikasi keamanan|access denied|masuk untuk melanjutkan|login to continue|security verification/i.test(body+' '+new URL(page.url()).pathname);
+              const data={url,status:r?.status(),path:new URL(page.url()).pathname,blocked,body,network};
+              if(!blocked){
+                Object.assign(data,await page.evaluate(()=>({title:document.title,headings:[...document.querySelectorAll('h1,h2')].map(e=>e.innerText).slice(0,15),ogTitle:document.querySelector('meta[property="og:title"]')?.content,ogImage:document.querySelector('meta[property="og:image"]')?.content,images:[...document.images].filter(e=>e.naturalWidth>100).slice(0,20).map(e=>({src:e.currentSrc,alt:e.alt,width:e.naturalWidth,height:e.naturalHeight}))})));
+              }
+              await page.screenshot({path:'evidence/page-'+i+'.png'});
+              fs.writeFileSync('evidence/page-'+i+'.json',JSON.stringify(data,null,2));
+              console.log(JSON.stringify(data));
+              if(blocked){await context.close();break;}
+            }catch(e){console.log(JSON.stringify({url,error:e.message}));}
+            await context.close();
+          }
+          await browser.close();
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-evidence
+          path: evidence/
